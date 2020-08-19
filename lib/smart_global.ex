@@ -1,5 +1,8 @@
-defmodule SmartGlobal.Guard,
-  do: defguard is_simple(x) when is_atom(x) or is_number(x) or is_binary(x) or is_bitstring(x)
+defmodule SmartGlobal.Guard do
+  defguard is_simple(x) when is_atom(x) or is_number(x) or is_binary(x) or is_bitstring(x)
+  defguard is_var(x) when is_tuple(x) and :erlang.size(x) == 2 and elem(x, 0) == :var and is_atom(elem(x, 1))
+
+end
 
 defmodule SmartGlobal.Error do
   defexception [:message]
@@ -54,6 +57,8 @@ defmodule SmartGlobal do
   ```
   """
 
+  import :erl_parse, only: [abstract: 1]
+
   import __MODULE__.Guard
   alias __MODULE__.Error
 
@@ -70,14 +75,10 @@ defmodule SmartGlobal do
     do: forms(mod_name, mod_mapping) |> :compile.forms([:verbose, :report_errors])
 
   def forms(mod_name, mod_mapping) when not is_nil(mod_name) and is_atom(mod_name) do
-    import :erl_parse, only: [abstract: 1]
-
     fun_groups =
       mod_mapping
       |> Enum.map(fn {fun, mapping} when is_atom(fun) -> {fun, groups(mapping)} end)
       |> Enum.into(%{})
-
-    abstract_arg = &(&1 == :_ && {:var, 0, :_} || abstract(&1))
 
     [{:attribute, 0, :module, mod_name},
      {:attribute, 0, :export,
@@ -92,17 +93,30 @@ defmodule SmartGlobal do
              {:function, 0, fun, arity,
               Enum.map(argsval,
                 fn {args, val} ->
-                  {:clause, 0, Enum.map(args, abstract_arg), [], [abstract(val)]}
+                  {:clause, 0, Enum.map(args, &abstract_arg/1), [], [ret_expr(val)]}
                 end)}
            end)
        end)]
   end
 
 
+  def abstract_arg(:_), do: {:var, 0, :_}
+  def abstract_arg({:var, n}) when is_atom(n), do: {:var, 0, arg_name(n)}
+  def abstract_arg(x), do: abstract(x)
+
+  def arg_name(x) when is_atom(x), do: :"_#{x}@1"
+
+  def ret_expr({:"$call", mod, name, args}) when is_atom(name) and is_list(args),
+    do: {:call, 0, {:remote, 0, {:atom, 0, mod}, {:atom, 7, name}},
+         Enum.map(args, &abstract_arg/1)}
+  def ret_expr(val),
+    do: abstract(val)
+
+
   defp groups(argsvals) when is_list(argsvals),
     do: Enum.group_by(argsvals,
           fn {args, _} ->
-            for a <- args, do: is_simple(a) || raise Error, value: a
+            Enum.each(args, &(is_simple(&1) || is_var(&1) || raise Error, value: &1))
             Enum.count(args)
           end)
   defp groups(argvals) when is_map(argvals) do
@@ -111,7 +125,7 @@ defmodule SmartGlobal do
       |> Map.drop([:_])
       |> Enum.reduce([],
            fn {arg, val}, acc ->
-             is_simple(arg) || raise Error, value: arg
+             &(is_simple(&1) || is_var(&1) || raise Error, value: &1)
              [{[arg], val} | acc]
            end)
     %{1 => Enum.reverse(case Map.get(argvals, :_, nil) do

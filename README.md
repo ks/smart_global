@@ -4,6 +4,7 @@
   Such module can be generated at the application startup and send to other nodes to load.
   Doesn't support updates, but the module can be regenerated with different bindings.
   Supports _ wildcard to return the default value.
+  In the body of - besides returning of a value - allows passing argument (or constant) to function call
 
   Example:
   ```
@@ -11,15 +12,18 @@
 
     XXX,
 
-    %{fun1: [{[:a, :b, :c], :three_little_piggies},
+    %{
+      fun1: [{[:a, :b, :c], :three_little_piggies},
              {[:xx, :yy], [1,2,3,5]},
              {[:cc, 123], <<1,2,3,4,5>>},
              {[:_], :default}],
 
       fun2: %{a: 100,
               b: 200,
-              _: :yaya}}
+              _: :yaya},
 
+      fun3: [{[{:var, :x}], {:"$call", String.Chars, :to_string, [{:var, :x}]}}]
+     }
     )
   ```
   will generate a module which when decompied to Elixir would look like:
@@ -35,6 +39,8 @@
     def fun2(:a), do: 100
     def fun2(:b), do: 200
     def fun2(_), do: :yaya
+
+    def fun3(x), do: String.Chars.to_string(x)
   end
   ```
 
